@@ -50,3 +50,5 @@ keybinds:
 
 `space` play / pause
 
+any key will perform a search string from the manifest
+
