@@ -1146,6 +1146,7 @@ static void moveCursor(int delta) {
 }
 
 // INC register returns the signed step count since the last read; each step is one row.
+static void changeVolume(int d);
 static void pollScroll() {
     unsigned long now = millis();
     if (!scrollPresent) {
@@ -1164,6 +1165,7 @@ static void pollScroll() {
     lastInputTime = now;
     int steps = delta < 0 ? -delta : delta;
     if (steps > 5) steps = 5;
+    if (!screenVisible()) { changeVolume((delta > 0 ? +8 : -8) * steps); return; }
     for (int i = 0; i < steps; i++) moveCursor(delta > 0 ? +1 : -1);
 }
 
@@ -1216,21 +1218,22 @@ struct Marquee {
     void (*after)() = nullptr;
 };
 static Marquee mqTitle, mqArtist, mqBrowser, mqQueue;
+// one shared off-screen canvas, widest marquee box x ROW_H, 16-bit: 108*13*2 = 2808 bytes
+static const int MQ_MAX_W = 108;
+static M5Canvas mqCanvas(&M5Cardputer.Display);
 
 static void marqueeDraw(Marquee &m) {
     auto &d = M5Cardputer.Display;
-    d.setFont(FONT);
-    d.setClipRect(m.x, m.y, m.w, ROW_H);
-    d.fillRect(m.x, m.y, m.w, ROW_H, m.bg);
-    d.setTextColor(m.fg);
+    mqCanvas.fillSprite(m.bg);
+    mqCanvas.setTextColor(m.fg);
     if (m.scrolling) {
-        int x = m.x + m.scrollX;
-        d.setCursor(x, m.y + 1); d.print(m.text);
-        d.setCursor(x + m.textW + MARQUEE_GAP, m.y + 1); d.print(m.text);
+        mqCanvas.setCursor(m.scrollX, 1); mqCanvas.print(m.text);
+        mqCanvas.setCursor(m.scrollX + m.textW + MARQUEE_GAP, 1); mqCanvas.print(m.text);
     } else {
-        int x = m.centered ? m.x + (m.w - m.textW) / 2 : m.x;
-        d.setCursor(x, m.y + 1); d.print(m.text);
+        mqCanvas.setCursor(m.centered ? (m.w - m.textW) / 2 : 0, 1); mqCanvas.print(m.text);
     }
+    d.setClipRect(m.x, m.y, m.w, ROW_H);
+    mqCanvas.pushSprite(m.x, m.y);
     d.clearClipRect();
     if (m.after) m.after();
 }
@@ -1453,6 +1456,10 @@ void setup() {
     d.setRotation(1);
     d.setFont(FONT);
     d.setTextWrap(false);
+    mqCanvas.setColorDepth(16);
+    mqCanvas.createSprite(MQ_MAX_W, ROW_H);
+    mqCanvas.setFont(FONT);
+    mqCanvas.setTextWrap(false);
     applyTheme();
     d.fillScreen(COL_BG);
 
@@ -1521,9 +1528,10 @@ void loop() {
         lastInputTime = millis();
         auto ks = M5Cardputer.Keyboard.keysState();
         bool fn = ks.fn;
-        if (ks.space) { if (searchMode && !fn) searchType(' '); else togglePause(); }
+        if (ks.space) { if (searchMode) searchType(' '); else if (!fn) togglePause(); }
         if (ks.del && searchMode) searchBackspace();
         for (char c : ks.word) {
+            if (c == ' ') continue;
             if (fn) {
                 if      (c == KEY_VOLUP)                        changeBrightness(+16);
                 else if (c == KEY_VOLDN_A || c == KEY_VOLDN_B)  changeBrightness(-16);
