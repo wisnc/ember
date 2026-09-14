@@ -1,7 +1,3 @@
-// ember, three-pane build for the M5 Cardputer ADV (ESP32-S3, no PSRAM).
-// Audio path (file source, ID3 wrapper, decoders, decoder->loop() pump, open/stop/advance,
-// folder-to-queue builder) carried over from the original ember firmware.
-
 #include <M5Cardputer.h>
 #include <SD.h>
 #include <SPI.h>
@@ -19,10 +15,8 @@
 #include "AudioGeneratorAAC.h"
 #include "AudioOutput.h"
 
-// ---------- SD pins (Cardputer ADV) ----------
 static const int SD_SCK = 40, SD_MISO = 39, SD_MOSI = 14, SD_CS = 12;
 
-// ---------- Key map ----------
 static const char KEY_UP = ';', KEY_DOWN = '.', KEY_LEFT = ',', KEY_RIGHT = '/';
 static const char KEY_NEXT = ']', KEY_PREV = '[';
 static const char KEY_SHUFFLE = '\\';
@@ -31,32 +25,28 @@ static const char KEY_VOLUP = '=';
 static const char KEY_VOLDN_A = '_', KEY_VOLDN_B = '-';
 static const char KEY_SCAN_A = 's', KEY_SCAN_B = 'S';
 
-// ---------- Unit Scroll (Grove port A, I2C 0x40) ----------
 static const uint8_t SCROLL_ADDR = 0x40, SCROLL_INC_REG = 0x50, SCROLL_FW_REG = 0xFE;
 static const uint32_t SCROLL_FREQ = 400000;
 static bool scrollPresent = false;
 static unsigned long scrollLastPoll = 0, scrollLastProbe = 0;
 
-// ---------- Screen geometry (240x135) ----------
 static const int SCR_W = 240, SCR_H = 135;
 static const int MARGIN = 5, GAP = 2, BORDER = 2, PAD = 2, INSET = BORDER + PAD;
 
-static const int LEFT_X = MARGIN, LEFT_Y = MARGIN, LEFT_W = 116, LEFT_H = SCR_H - 2 * MARGIN;   // 5,5,116,125
-static const int RIGHT_X = LEFT_X + LEFT_W + GAP, RIGHT_W = SCR_W - MARGIN - RIGHT_X;            // 123, 112
+static const int LEFT_X = MARGIN, LEFT_Y = MARGIN, LEFT_W = 116, LEFT_H = SCR_H - 2 * MARGIN;
+static const int RIGHT_X = LEFT_X + LEFT_W + GAP, RIGHT_W = SCR_W - MARGIN - RIGHT_X;
 static const int NP_Y = MARGIN, NP_H = 50;
-static const int Q_Y = NP_Y + NP_H + GAP, Q_H = SCR_H - MARGIN - Q_Y;                            // 57, 73
+static const int Q_Y = NP_Y + NP_H + GAP, Q_H = SCR_H - MARGIN - Q_Y;
 
-// Content rectangles (pane box inset by 4 on every side).
-static const int LC_X = LEFT_X + INSET, LC_Y = LEFT_Y + INSET, LC_W = LEFT_W - 2 * INSET, LC_H = LEFT_H - 2 * INSET;  // 9,9,108,117
-static const int NC_X = RIGHT_X + INSET, NC_Y = NP_Y + INSET, NC_W = RIGHT_W - 2 * INSET, NC_H = NP_H - 2 * INSET;    // 127,9,104,42
-static const int QC_X = RIGHT_X + INSET, QC_Y = Q_Y + INSET, QC_W = RIGHT_W - 2 * INSET, QC_H = Q_H - 2 * INSET;      // 127,61,104,65
+static const int LC_X = LEFT_X + INSET, LC_Y = LEFT_Y + INSET, LC_W = LEFT_W - 2 * INSET, LC_H = LEFT_H - 2 * INSET;
+static const int NC_X = RIGHT_X + INSET, NC_Y = NP_Y + INSET, NC_W = RIGHT_W - 2 * INSET, NC_H = NP_H - 2 * INSET;
+static const int QC_X = RIGHT_X + INSET, QC_Y = Q_Y + INSET, QC_W = RIGHT_W - 2 * INSET, QC_H = Q_H - 2 * INSET;
 
 static const lgfx::IFont* FONT = &fonts::lgfxJapanGothic_12;
 static const int ROW_H = 13;
 static const int BROWSER_ROWS = LC_H / ROW_H;
 static const int QUEUE_ROWS   = QC_H / ROW_H;
 
-// ---------- Config ----------
 static const char* CFG_DIR   = "/.ember";
 static const char* CFG_PATH  = "/.ember/config";
 static const char* IDX_TXT   = "/.ember/index.txt";
@@ -65,7 +55,7 @@ static const char* IDX_BIN   = "/.ember/index.bin";
 static const int MY_PATH_MAX = 256;
 static char     cfgMusicDir[MY_PATH_MAX] = "/Music";
 static int      cfgBrightness = 255;
-static uint32_t cfgScreenTimeoutMs = 30000;   // 0 = never
+static uint32_t cfgScreenTimeoutMs = 30000;
 static uint32_t cfgAccentRGB = 0xF88C00;
 static uint32_t cfgBackgroundRGB = 0x000000;
 static bool     cfgShuffle = false;
@@ -85,7 +75,6 @@ static uint32_t blend24(uint32_t a, uint32_t b, int t) {
 }
 static int luma24(uint32_t c) { return (299 * ((c >> 16) & 0xFF) + 587 * ((c >> 8) & 0xFF) + 114 * (c & 0xFF)) / 1000; }
 
-// text = accent pushed toward white (dark bg) or black (light bg); dim = accent pulled into bg
 static void applyTheme() {
     COL_ACCENT = rgb565From24(cfgAccentRGB);
     COL_BG     = rgb565From24(cfgBackgroundRGB);
@@ -151,7 +140,6 @@ static void loadConfig() {
     if (L > 1 && cfgMusicDir[L-1] == '/') cfgMusicDir[L-1] = '\0';
 }
 
-// ---------- Directory model (all static, no heap) ----------
 static const int MAX_ENTRIES = 256, NAME_POOL_SIZE = 8192, MAX_DEPTH = 8;
 static char     namePool[NAME_POOL_SIZE];
 static uint16_t nameOffset[MAX_ENTRIES];
@@ -164,15 +152,13 @@ static int  cursor = 0, scroll = 0, depth = 0;
 static int  cursorStack[MAX_DEPTH], scrollStack[MAX_DEPTH];
 static bool rootOk = false;
 
-// ---------- Play queue ----------
-static const int QUEUE_MAX = 256, QNAME_POOL = 16384;   // entries are full paths
+static const int QUEUE_MAX = 256, QNAME_POOL = 16384;
 static char     queuePool[QNAME_POOL];
 static uint16_t queueOffset[QUEUE_MAX];
 static int      queueCount = 0, queuePoolUsed = 0;
 static char     queueFolder[MY_PATH_MAX] = "";
 static int      queuePos = 0;
 
-// ---------- Playback state ----------
 enum PlayState { STOPPED, PLAYING, PAUSED };
 static PlayState playState = STOPPED;
 static char nowPlaying[64] = "";
@@ -188,7 +174,6 @@ static AudioGenerator     *decoder = nullptr;
 static AudioFileSourceSD  *file = nullptr;
 static AudioFileSourceID3 *id3  = nullptr;
 
-// ---------- Custom AudioOutput: triple-buffered feed to ES8311 via M5 Speaker ----------
 class AudioOutputM5Speaker : public AudioOutput {
 public:
     AudioOutputM5Speaker(m5::Speaker_Class* m5sound, uint8_t ch = 0) { _m5sound = m5sound; _virtual_ch = ch; }
@@ -219,7 +204,6 @@ protected:
 };
 static AudioOutputM5Speaker *out = nullptr;
 
-// ---------- UI state ----------
 static bool needsFullRedraw = true;
 static bool redrawBrowser = false, redrawNowPlaying = false, redrawQueue = false;
 
@@ -228,7 +212,6 @@ static bool screenIsOff = false;
 static unsigned long lastInputTime = 0;
 static bool screenVisible() { return displayOn && !screenIsOff; }
 static bool panelAsleep = false;
-// Dark panel: backlight 0, panel SLPIN, CPU 160 MHz. Audio path untouched; drawing is skipped while dark.
 static void applyBacklight() {
     auto &d = M5Cardputer.Display;
     if (screenVisible()) {
@@ -240,7 +223,6 @@ static void applyBacklight() {
     }
 }
 
-// ---------- File helpers ----------
 static bool hasExt(const char* s, const char* ext) {
     int n = (int)strlen(s), el = (int)strlen(ext);
     if (n < el) return false;
@@ -321,9 +303,7 @@ static void sortEntries() {
     }
 }
 
-// ---------- Directory enumeration ----------
 static const char* SD_MOUNT = "/sd";
-// readdir on the FatFS VFS: name + type per entry, no open/stat per file
 static DIR* openSdDir(const char* path) {
     char vfs[MY_PATH_MAX + 8];
     snprintf(vfs, sizeof(vfs), "%s%s", SD_MOUNT, path);
@@ -338,7 +318,6 @@ static bool direntIsDir(const char* dirPath, const struct dirent* de) {
     return stat(vfs, &st) == 0 && S_ISDIR(st.st_mode);
 }
 
-// ---------- Directory load ----------
 static bool loadDir() {
     entryCount = 0; poolUsed = 0;
     DIR* dir = openSdDir(currentPath);
@@ -364,7 +343,6 @@ static bool loadDir() {
     return true;
 }
 
-// ---------- Play queue: snapshot a folder's tracks (alphabetized) ----------
 static void buildQueue(const char* folder) {
     queueCount = 0; queuePoolUsed = 0;
     strncpy(queueFolder, folder, MY_PATH_MAX - 1);
@@ -399,7 +377,6 @@ static void buildQueue(const char* folder) {
 
 static const char* queueName(int i) { return &queuePool[queueOffset[i]]; }
 
-// ---------- Text encoding helpers ----------
 static void utf16ToUtf8(const uint8_t* b, size_t n, bool bigEndian, char* dst, size_t dstSize) {
     size_t i = 0, o = 0;
     if (n >= 2) {
@@ -446,8 +423,6 @@ static void mp3MetadataCB(void* cbData, const char* type, bool isUnicode, const 
     else if (!strcmp(type, "Album"))     copyMeta(curAlbum,  sizeof(curAlbum),  isUnicode, str);
 }
 
-// ---------- Scan index ----------
-// index.bin: "EMIX" + count + count x {hash, offset}, sorted by hash. index.txt: path\ttitle\tartist\talbum
 static const int INDEX_MAX = 4096;
 static uint32_t idxHash[INDEX_MAX];
 static uint32_t idxOffset[INDEX_MAX];
@@ -540,7 +515,6 @@ static void displayTitleFor(const char* path, char* out, size_t outSize) {
     stripExt(baseName(path), out, outSize);
 }
 
-// ---- Tag readers for the scan (independent of the live decoder) ----
 static uint32_t be32(const uint8_t* p) { return ((uint32_t)p[0] << 24) | ((uint32_t)p[1] << 16) | ((uint32_t)p[2] << 8) | p[3]; }
 static uint32_t be24(const uint8_t* p) { return ((uint32_t)p[0] << 16) | ((uint32_t)p[1] << 8) | p[2]; }
 static uint32_t le32(const uint8_t* p) { return ((uint32_t)p[3] << 24) | ((uint32_t)p[2] << 16) | ((uint32_t)p[1] << 8) | p[0]; }
@@ -653,7 +627,6 @@ static void sanitizeField(char* s) {
     trimRight(s);
 }
 
-// ---- Scan progress display ----
 static void drawPaneFrames();
 static void drawScanProgress(int tracks, const char* status) {
     if (!screenVisible()) return;
@@ -671,7 +644,6 @@ static File scanOut;
 static int  scanTracks = 0, scanSkipped = 0;
 static unsigned long scanLastDraw = 0;
 
-// static per-level path buffers: loop task stack is 8 KB
 static char scanPathBuf[MAX_DEPTH][MY_PATH_MAX];
 static char scanNameBuf[MY_PATH_MAX];
 
@@ -760,11 +732,10 @@ static void runScan() {
     needsFullRedraw = true;
 }
 
-// ---------- Playback control ----------
 static char npTitle[TITLE_MAX] = "";
 static char npArtist[TITLE_MAX] = "";
 static char npAlbum[TITLE_MAX] = "";
-static char npLine2[2 * TITLE_MAX + 4] = "";   // "artist | album"
+static char npLine2[2 * TITLE_MAX + 4] = "";
 static void buildLine2() {
     if (npArtist[0] && npAlbum[0]) snprintf(npLine2, sizeof(npLine2), "%s | %s", npArtist, npAlbum);
     else if (npArtist[0]) snprintf(npLine2, sizeof(npLine2), "%s", npArtist);
@@ -819,7 +790,6 @@ static void playQueuePos(int pos) {
     redrawNowPlaying = true; redrawQueue = true;
 }
 
-// ---------- Shuffle ----------
 static int shuffleOrder[QUEUE_MAX];
 static int shufflePos = 0;
 static void buildShuffle(int firstQueueIdx) {
@@ -853,13 +823,25 @@ static void toggleShuffle() {
     redrawNowPlaying = true;
 }
 
+static const int SEEK_STEP_PCT = 5;
+static void seekBy(int pct) {
+    if (playState == STOPPED || !file) return;
+    uint32_t sz = file->getSize();
+    if (sz < 4096) return;
+    int64_t pos = (int64_t)file->getPos() + (int64_t)sz * pct / 100;
+    if (pos < 0) pos = 0;
+    if (pos > (int64_t)sz - 4096) pos = (int64_t)sz - 4096;
+    pos &= ~(int64_t)3;
+    file->seek((int32_t)pos, SEEK_SET);
+    redrawNowPlaying = true;
+}
+
 static void togglePause() {
     if (playState == PLAYING) playState = PAUSED;
     else if (playState == PAUSED) playState = PLAYING;
     redrawNowPlaying = true;
 }
 
-// ---------- Browser navigation (rooted at music_dir) ----------
 static void enterFolder(int viewIdx) {
     if (depth >= MAX_DEPTH - 1) return;
     cursorStack[depth] = cursor; scrollStack[depth] = scroll;
@@ -912,8 +894,6 @@ static void playPath(const char* full) {
     playQueuePos(startPos);
 }
 
-// at = -1 appends (random later slot when shuffling); else a play-order position:
-// queueOffset index when sequential, shuffleOrder index when shuffling. Returns queue index or -1.
 static int queueInsert(const char* full, int at) {
     int len = strlen(full);
     if (queueCount >= QUEUE_MAX || (queuePoolUsed + len + 1) >= QNAME_POOL) return -1;
@@ -993,7 +973,6 @@ static void queueAppendFolder(const char* folder, bool next) {
     startIfStopped(first);
 }
 
-// ---------- Search ----------
 static bool searchMode = false;
 static char searchQuery[25] = "";
 static bool searchDirty = false;
@@ -1145,7 +1124,6 @@ static void moveCursor(int delta) {
     else if (cursor != oldCursor && screenVisible()) { drawBrowserRow(oldCursor); drawBrowserRow(cursor); }
 }
 
-// INC register returns the signed step count since the last read; each step is one row.
 static void changeVolume(int d);
 static void pollScroll() {
     unsigned long now = millis();
@@ -1186,7 +1164,6 @@ static void changeBrightness(int d) {
     saveConfig();
 }
 
-// ---------- Drawing ----------
 static String trimToWidth(LovyanGFX &d, const char* text, int maxW) {
     String s(text);
     while (s.length() > 0 && d.textWidth(s.c_str()) > maxW) {
@@ -1210,7 +1187,7 @@ static void drawPaneFrames() {
 static const int MARQUEE_STEP = 1, MARQUEE_INTERVAL_MS = 35, MARQUEE_GAP = 28, MARQUEE_HOLD_MS = 900;
 struct Marquee {
     bool active = false, scrolling = false, centered = false;
-    int x = 0, y = 0, w = 0;      // clip box, ROW_H tall; text prints at y+1
+    int x = 0, y = 0, w = 0;
     uint16_t fg = 0, bg = 0;
     char text[2 * TITLE_MAX + 4] = "";
     int textW = 0, scrollX = 0;
@@ -1218,7 +1195,6 @@ struct Marquee {
     void (*after)() = nullptr;
 };
 static Marquee mqTitle, mqArtist, mqBrowser, mqQueue;
-// one shared off-screen canvas, widest marquee box x ROW_H, 16-bit: 108*13*2 = 2808 bytes
 static const int MQ_MAX_W = 108;
 static M5Canvas mqCanvas(&M5Cardputer.Display);
 
@@ -1270,7 +1246,6 @@ static void marqueeTickAll() {
     marqueeTickOne(mqQueue, now);
 }
 
-// ---- Browser pane ----
 static void drawBrowserOutline() {
     int row = cursor - scroll;
     if (row < 0 || row >= BROWSER_ROWS) return;
@@ -1324,7 +1299,6 @@ static void drawBrowser() {
     for (int r = 0; r < BROWSER_ROWS; r++) drawBrowserRow(scroll + r);
 }
 
-// query sits in the left pane top border; 6x8 font so it stays above LC_Y
 static void drawSearchLabel() {
     if (!screenVisible()) return;
     auto &d = M5Cardputer.Display;
@@ -1344,7 +1318,6 @@ static void drawSearchLabel() {
     d.setFont(FONT);
 }
 
-// ---- Now Playing pane: title / artist | album / status ----
 static const int NP_LINE1_Y = NC_Y, NP_LINE2_Y = NC_Y + ROW_H, NP_STATUS_Y = NC_Y + 2 * ROW_H + 2;
 
 static int progressPercent() {
@@ -1394,7 +1367,6 @@ static void drawNowPlaying() {
     drawNowPlayingStatus();
 }
 
-// ---- Queue pane ----
 static void drawQueue() {
     auto &d = M5Cardputer.Display;
     d.setFont(FONT);
@@ -1431,7 +1403,6 @@ static void drawAll() {
     drawQueue();
 }
 
-// ---------- Setup ----------
 void setup() {
     Serial.begin(115200);
     delay(1500);
@@ -1496,11 +1467,9 @@ void setup() {
     needsFullRedraw = false;
 }
 
-// ---------- Main loop ----------
 void loop() {
     M5Cardputer.update();
 
-    // ---- pump decoder; auto-advance on track end ----
     if (playState == PLAYING && decoder && decoder->isRunning()) {
         if (!decoder->loop()) {
             if (hasNextTrack()) {
@@ -1515,7 +1484,6 @@ void loop() {
         }
     }
 
-    // ---- g0 (GPIO0 button, M5Unified BtnA): display on/off, brightness value untouched ----
     if (M5Cardputer.BtnA.wasPressed()) {
         lastInputTime = millis();
         if (screenVisible()) displayOn = false;
@@ -1523,7 +1491,6 @@ void loop() {
         applyBacklight();
     }
 
-    // ---- keyboard ----
     if (M5Cardputer.Keyboard.isChange() && M5Cardputer.Keyboard.isPressed()) {
         lastInputTime = millis();
         auto ks = M5Cardputer.Keyboard.keysState();
@@ -1537,6 +1504,8 @@ void loop() {
                 else if (c == KEY_VOLDN_A || c == KEY_VOLDN_B)  changeBrightness(-16);
                 else if (c == KEY_SCAN_A || c == KEY_SCAN_B)    runScan();
                 else if (c == KEY_ENQUEUE)                      enqueueSelected(true);
+                else if (c == KEY_RIGHT)                        seekBy(+SEEK_STEP_PCT);
+                else if (c == KEY_LEFT)                         seekBy(-SEEK_STEP_PCT);
                 continue;
             }
             if      (c == KEY_UP)    moveCursor(-1);
@@ -1555,16 +1524,13 @@ void loop() {
 
     pollScroll();
 
-    // ---- debounced search ----
     if (searchDirty && millis() - searchDirtyAt >= 200) { searchDirty = false; runSearch(); }
 
-    // ---- screen-off timeout ----
     if (displayOn && !screenIsOff && cfgScreenTimeoutMs != 0 && millis() - lastInputTime >= cfgScreenTimeoutMs) {
         screenIsOff = true;
         applyBacklight();
     }
 
-    // ---- redraws (skipped while the panel is dark; flags stay pending) ----
     if (screenVisible()) {
         if (needsFullRedraw) {
             drawAll();
