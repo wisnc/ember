@@ -750,6 +750,18 @@ static void stopPlayback() {
     M5Cardputer.Speaker.stop();
 }
 
+static uint32_t id3TagBytes(const char* path) {
+    File f = SD.open(path, FILE_READ);
+    if (!f) return 0;
+    uint8_t h[10];
+    int n = f.read(h, 10);
+    f.close();
+    if (n != 10 || memcmp(h, "ID3", 3) != 0) return 0;
+    uint32_t sz = 10 + syncsafe(h + 6);
+    if (h[3] == 4 && (h[5] & 0x10)) sz += 10;
+    return sz;
+}
+
 static void playQueuePos(int pos) {
     if (queueCount == 0) return;
     if (pos < 0) pos = queueCount - 1;
@@ -761,7 +773,11 @@ static void playQueuePos(int pos) {
     stopPlayback();
     curArtist[0] = curTitle[0] = curAlbum[0] = '\0';
     curFormat = formatForName(full);
+    uint32_t tagBytes = id3TagBytes(full);
+    readTags(full, curTitle, sizeof(curTitle), curArtist, sizeof(curArtist), curAlbum, sizeof(curAlbum));
     file = new AudioFileSourceSD(full);
+    if (tagBytes && tagBytes + 4096 < file->getSize()) file->seek((int32_t)tagBytes, SEEK_SET);
+    Serial.printf("open %s size=%lu id3=%lu\n", full, (unsigned long)file->getSize(), (unsigned long)tagBytes);
     id3  = new AudioFileSourceID3(file);
     id3->RegisterMetadataCB(mp3MetadataCB, nullptr);
     switch (curFormat) {
@@ -770,7 +786,9 @@ static void playQueuePos(int pos) {
         case FMT_AAC:  decoder = new AudioGeneratorAAC();  break;
         default:       decoder = new AudioGeneratorMP3();  break;
     }
-    if (decoder->begin(id3, out)) {
+    bool ok = decoder->begin(id3, out);
+    Serial.printf("begin=%d\n", ok ? 1 : 0);
+    if (ok) {
         playState = PLAYING;
         strncpy(nowPlaying, baseName(full), sizeof(nowPlaying) - 1);
         nowPlaying[sizeof(nowPlaying) - 1] = '\0';
