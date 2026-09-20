@@ -1182,8 +1182,39 @@ static void changeBrightness(int d) {
     saveConfig();
 }
 
+static bool glyphExists(uint32_t cp) {
+    if (cp > 0xFFFF) return false;
+    lgfx::FontMetrics fm;
+    return FONT->updateFontMetric(&fm, (uint16_t)cp);
+}
+
+static void fontSanitize(const char* in, char* out, size_t outSize) {
+    size_t o = 0;
+    const uint8_t* p = (const uint8_t*)in;
+    while (*p && o + 1 < outSize) {
+        uint8_t c = *p;
+        uint32_t cp; int len;
+        if (c < 0x80) { cp = c; len = 1; }
+        else if ((c & 0xE0) == 0xC0) { cp = c & 0x1F; len = 2; }
+        else if ((c & 0xF0) == 0xE0) { cp = c & 0x0F; len = 3; }
+        else if ((c & 0xF8) == 0xF0) { cp = c & 0x07; len = 4; }
+        else { p++; out[o++] = '?'; continue; }
+        bool bad = false;
+        for (int i = 1; i < len; i++) { if ((p[i] & 0xC0) != 0x80) { bad = true; break; } cp = (cp << 6) | (p[i] & 0x3F); }
+        if (bad) { p++; out[o++] = '?'; continue; }
+        p += len;
+        if (!glyphExists(cp)) { out[o++] = '?'; continue; }
+        if (cp < 0x80) out[o++] = (char)cp;
+        else if (cp < 0x800) { if (o + 2 >= outSize) break; out[o++] = 0xC0 | (cp >> 6); out[o++] = 0x80 | (cp & 0x3F); }
+        else { if (o + 3 >= outSize) break; out[o++] = 0xE0 | (cp >> 12); out[o++] = 0x80 | ((cp >> 6) & 0x3F); out[o++] = 0x80 | (cp & 0x3F); }
+    }
+    out[o] = '\0';
+}
+
 static String trimToWidth(LovyanGFX &d, const char* text, int maxW) {
-    String s(text);
+    char clean[2 * TITLE_MAX + 4];
+    fontSanitize(text, clean, sizeof(clean));
+    String s(clean);
     while (s.length() > 0 && d.textWidth(s.c_str()) > maxW) {
         int n = s.length() - 1;
         while (n > 0 && ((uint8_t)s[n] & 0xC0) == 0x80) n--;
@@ -1235,7 +1266,7 @@ static void marqueeDraw(Marquee &m) {
 static void marqueeSet(Marquee &m, const char* text, int x, int y, int w, uint16_t fg, uint16_t bg, bool centered, void (*after)()) {
     auto &d = M5Cardputer.Display;
     d.setFont(FONT);
-    strncpy(m.text, text, sizeof(m.text) - 1); m.text[sizeof(m.text) - 1] = '\0';
+    fontSanitize(text, m.text, sizeof(m.text));
     m.x = x; m.y = y; m.w = w; m.fg = fg; m.bg = bg; m.centered = centered; m.after = after;
     m.textW = d.textWidth(m.text);
     m.scrolling = m.textW > w;
